@@ -42,6 +42,21 @@ data
 - 路径是 `timeline.timeline`，不是 `timeline_v2.timeline`（X 已改版）
 - `result` 下有时直接挂 `legacy`，有时套了一层 `tweet`，需要兼容两种情况
 
+## 时间格式
+
+`created_at` 的原始格式为 Twitter 标准时间格式，时区固定为 UTC：
+
+```
+Mon Mar 30 16:03:39 +0000 2026
+```
+
+输出时可转换为更易读的 ISO 格式：
+
+```js
+new Date(created_at).toISOString().slice(0, 19).replace('T', ' ')
+// => "2026-03-30 16:03:39"
+```
+
 ## 实现代码
 
 ```js
