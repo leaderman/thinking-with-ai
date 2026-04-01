@@ -53,7 +53,8 @@ result
 ### 图文推文（文本 + 图片）
 
 - `legacy.extended_entities.media` 中包含媒体项
-- 每个媒体项有 `type` 字段，可选值：`photo` / `video` / `animated_gif`
+- `media[].type` = `"photo"`
+- `media_url_https` 即图片地址
 
 ```
 result
@@ -61,11 +62,37 @@ result
     ├── full_text
     └── extended_entities
         └── media[]
-            ├── type              ← "photo" | "video" | "animated_gif"
-            └── media_url_https   ← 媒体资源 URL
+            ├── type              ← "photo"
+            └── media_url_https   ← 图片 URL
 ```
 
 示例：`https://x.com/thedankoe/status/1903846467141521502`
+
+---
+
+### 视频推文（文本 + 视频）
+
+- `legacy.extended_entities.media` 中包含媒体项
+- `media[].type` = `"video"` 或 `"animated_gif"`
+- `media_url_https` 是视频封面图，视频本身在 `video_info.variants[]` 中，按码率列出多个地址
+
+```
+result
+└── legacy
+    ├── full_text
+    └── extended_entities
+        └── media[]
+            ├── type                       ← "video" | "animated_gif"
+            ├── media_url_https            ← 封面图 URL
+            └── video_info
+                ├── duration_millis        ← 视频时长（毫秒）
+                └── variants[]
+                    ├── content_type       ← "video/mp4" | "application/x-mpegURL"
+                    ├── bitrate            ← 码率（bps）
+                    └── url                ← 视频地址
+```
+
+示例：`https://x.com/thedankoe/status/2031765325654716480`
 
 ---
 
@@ -96,11 +123,15 @@ result
 function getTweetType(tweet) {
   if (tweet.article) return 'article';
   const media = tweet.legacy?.extended_entities?.media;
-  if (media && media.length > 0) return 'media';
+  if (media && media.length > 0) {
+    const type = media[0].type;
+    if (type === 'video' || type === 'animated_gif') return 'video';
+    return 'photo';
+  }
   return 'text';
 }
 ```
 
 ## 可行性结论
 
-**完全可行。** 三种类型的推文均通过同一个 `TweetDetail` 接口返回，数据在页面加载时自动触发，无需额外操作。通过检查 `article` 字段是否存在、`extended_entities.media` 是否有内容，即可准确区分推文类型。
+**完全可行。** 四种类型的推文均通过同一个 `TweetDetail` 接口返回，数据在页面加载时自动触发，无需额外操作。区分逻辑：先看 `article` 字段，再看 `extended_entities.media[].type`，无媒体则为纯文本。
