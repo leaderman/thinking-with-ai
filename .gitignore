@@ -1,0 +1,9 @@
+# Ignore everything
+*
+
+# Allow markdown files, LICENSE and this file
+!.gitignore
+!*.md
+!LICENSE
+!*/
+!*/*.md
