@@ -57,3 +57,63 @@
 - **需要 cookie**：接口依赖浏览器 cookie，直接裸调返回空数据，须在已登录的页面上下文中发起请求
 - **参数嵌在 content 里**：没有独立的 arguments 字段，需用正则解析 `{argument name="..." default="..."}`
 - **人物头像不在接口里**：`author` 只有名字和 X 链接，头像需从 X 账号另行获取
+- **translatedContent**：content 的英文翻译版本，可用于英文场景
+
+## 接口调用示例
+
+**请求**
+
+```
+POST https://youmind.com/youhome-api/prompts
+Content-Type: application/json
+```
+
+```json
+{
+  "model": "nano-banana-pro",
+  "page": 1,
+  "limit": 18,
+  "locale": "zh-CN",
+  "campaign": "nano-banana-pro-prompts",
+  "filterMode": "imageCategories"
+}
+```
+
+**响应**
+
+```json
+{
+  "total": 12222,
+  "prompts": [
+    {
+      "id": 151,
+      "title": "带肖像和中英文定制的宽引言卡",
+      "description": "一个用于生成宽幅引言卡的提示，卡片上有一位名人的肖像，背景为棕色，引言文字为浅金色衬线字体。布局为文字占据三分之二，人物占据三分之一。引言文字和作者可参数化以便重复使用。",
+      "sourceLink": "https://x.com/stark_nico99/status/1991718646570426763",
+      "sourcePublishedAt": "2025-11-21T04:01:44.000Z",
+      "author": {
+        "name": "Nicolechan",
+        "link": "https://x.com/stark_nico99"
+      },
+      "content": "一张宽幅的名人金句卡，棕色背景，衬线体浅金色\"{argument name=\"金句\" default=\"保持饥饿，保持愚蠢\"}\"，小字\"——{argument name=\"作者\" default=\"Steve Jobs\"}\"，文字前面带一个大的淡淡的引号。人物头像在左边，文字在右边，文字占画面比例 2/3，人物占 1/3，人物有一点渐变过渡的感觉。",
+      "translatedContent": "一张宽幅引言卡片...（content 的英文翻译）",
+      "media": [
+        "https://cms-assets.youmind.com/media/1763886933714_5zqn1e_G6QBjQHbgAE3Yt_.jpg",
+        "..."
+      ],
+      "mediaThumbnails": [
+        "https://cms-assets.youmind.com/media/1763886933714_5zqn1e_G6QBjQHbgAE3Yt_-300x168.jpg",
+        "..."
+      ],
+      "language": "zh",
+      "sourcePlatform": "twitter",
+      "featured": true,
+      "sort": 1,
+      "likes": 1,
+      "resultsCount": 4,
+      "needReferenceImages": true,
+      "promptCategories": []
+    }
+  ]
+}
+```
