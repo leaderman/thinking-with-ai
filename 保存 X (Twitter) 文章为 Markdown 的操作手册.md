@@ -100,8 +100,6 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 **Published:** 发布日期
 **Source:** 原文 URL
 
-![Cover](images/cover.jpg)
-
 （正文段落）
 
 ![Image](images/img-01.jpg)
@@ -110,8 +108,10 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 ...
 ```
 
-**图片插入位置**：由于 X 的 DOM 结构复杂，图片在正文中的精确位置难以稳定获取。
-实用策略：第一张图作为封面（`cover.jpg`）放在标题下方，其余图片（`img-01.jpg` 起）**按照它们在 DOM 中出现的顺序**，穿插在对应段落附近插入。
+**封面图**：`cover.jpg` 只需下载保存，**不在 Markdown 中插入引用**，供外部调用方使用。
+
+**其余图片插入位置**：由于 X 的 DOM 结构复杂，图片在正文中的精确位置难以稳定获取。
+实用策略：`img-01.jpg` 起，**按照它们在 DOM 中出现的顺序**，穿插在对应段落附近插入。
 
 **噪声清理**：`innerText` 会包含点赞数、转发数、浏览量等 UI 文字（如 "28 79 795 372K"），以及重复的标题行，需要识别并去掉。判断依据：
 - 纯数字行或带 K/M 后缀的数字行
