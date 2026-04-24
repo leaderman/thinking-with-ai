@@ -1,5 +1,12 @@
 # 保存 X (Twitter) 文章为 Markdown 的操作手册
 
+## 分工原则
+
+- **代码**：只处理规则固定的机械操作（连接 CDP、导航、滚动、下载图片、写文件）
+- **AI**：处理所有需要语义理解的工作（识别标题/正文、清理噪声、处理特殊字符、生成 Markdown）
+
+---
+
 ## 前提条件
 
 - Chrome 已开启 CDP，默认端口 9222
@@ -36,71 +43,69 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 
 滚动完成后再等待 **1～2 秒**，让图片请求完成。
 
----
-
-## 第四步：提取页面内容
-
-### 文字内容
-使用 **placeholder 替换法**提取正文，兼顾行内格式与代码块还原：
-
-1. 找到所有 `<pre>` 元素，临时替换为 `___CODE_N___` 占位节点；同时隐藏 X Article 在 `<pre>` 前渲染的语言标签 `<div>`（如 `bash`）
-2. 对 `article` 调用 `innerText`（浏览器负责正确处理行内元素、链接、金额等）
-3. 还原 DOM（`<pre>` 复位、语言标签 div 恢复显示）
-4. 将 placeholder 替换为 markdown 代码块（` ```lang\n...\n``` `）
-5. 降级：找不到 `main article` 时使用 `document.body.innerText`
-
-### 图片列表
-用 `querySelectorAll('img')` 获取页面上所有图片，过滤条件：
-- `src` 不为空，且不是 `data:` base64 图
-- 不是头像图（URL 中不含 `profile_images`）
-- 不是表情图（URL 中不含 `emoji`）
-- 宽度大于 80px（排除像素追踪图）
-- 对 src 去重（同一张图可能出现多次）
-
-X 的图片 URL 形如：
-```
-https://pbs.twimg.com/media/XXXX?format=jpg&name=small
-```
-下载时将 `name=small` / `name=medium` 替换为 `name=large` 获取高清版本。
-
-### 元数据
-- 标题：按以下优先级获取：
-  1. `article h1` 的文字（X Article 长文有独立标题）
-  2. `<meta property="og:title">` 中解析引号内的内容（格式为 `Author on X: "文章标题" / X`）
-  3. 降级：`article.innerText` 第一条长度 > 10 的非空行（注意：第一行可能是作者名，需结合实际验证）
-- 发布时间：读文章内 `<time>` 元素的 `datetime` 属性
-- 作者：读 `[data-testid="User-Name"]` 区域的文字（这个 testid 相对稳定）
+> **注意**：滚动阶段目标标签页需保持激活状态（前台可见），否则 Chrome 会对后台标签页做渲染节流，懒加载图片可能无法触发。
 
 ---
 
-## 第五步：下载图片到本地
+## 第四步：脚本输出原始数据
 
-目录结构固定如下，以文章 URL 中的 **status ID** 作为目录名：
+脚本完成后，在文章目录下输出以下文件，供 AI 在下一步处理：
 
 ```
 /tmp/{status_id}/
 ├── .code/
 │   └── save-x-article.js   ← 执行脚本（隐藏目录）
-├── article.md
+├── raw.txt                  ← 页面原始文本（article.innerText，未经任何处理）
+├── images.json              ← 图片 URL 列表及本地文件名映射
+├── article.md               ← 由 AI 生成（下一步）
 └── images/
-    ├── cover.jpg            ← 封面图（第一张图）
+    ├── cover.jpg            ← 封面图（第一张图，只保存不引用）
     ├── img-01.jpg
     ├── img-02.jpg
     └── ...
 ```
 
-- 基础目录：`/tmp`
-- 文章目录：`/tmp/{status_id}/`（status ID 取自 URL，如 `https://x.com/user/status/2040202068091142208` → `2040202068091142208`）
-- 文章文件：`/tmp/{status_id}/article.md`
-- 图片目录：`/tmp/{status_id}/images/`
-- **封面图固定命名为 `cover.jpg`**，其余图片按顺序命名 `img-01.jpg`、`img-02.jpg`……
-- 下载时带上 `User-Agent` 请求头，避免被拒绝
+- `raw.txt`：直接写入 `article.innerText`，不做任何过滤或格式化
+- `images.json`：格式为 `[{ "url": "...", "file": "cover.jpg" }, ...]`
+- 图片 URL 中 `name=small` / `name=medium` 替换为 `name=large` 获取高清版本
+- 下载时带上 `User-Agent` 和 `Referer: https://x.com/` 请求头
+
+### 图片过滤规则（代码执行，规则固定）
+- `src` 不为空，且不是 `data:` base64 图
+- 不含 `profile_images`（头像）
+- 不含 `emoji`（表情）
+- 宽度大于 80px（排除像素追踪图）
+- 对 src 去重
 
 ---
 
-## 第六步：生成 Markdown
+## 第五步：AI 处理原始数据，生成 Markdown
 
-结构如下：
+AI 读取 `raw.txt` 和 `images.json`，生成 `article.md`。
+
+### AI 负责的工作
+
+**识别元数据**
+- 标题：从正文语义中判断（不依赖固定选择器）
+- 作者：识别 `@handle` 格式
+- 发布时间：识别时间戳格式
+
+**清理噪声**
+由 AI 语义判断，而非固定规则。典型噪声包括：
+- 点赞数、转发数、浏览量等统计数字行
+- X UI 按钮文字（Reply、Repost、Like、Follow 等）
+- 页面底部的推广内容（Want to publish、Upgrade to Premium 等）
+- 时间戳行、分隔符行
+
+**处理特殊字符**
+- 识别正文中可能与 Markdown 语法冲突的字符（`$`、`*`、`_` 等），按语义决定是否转义
+- 代码块内容保持原样，不转义
+
+**图片插入**
+- 封面图（`cover.jpg`）：不写入 Markdown，仅保存文件
+- 其余图片（`img-01.jpg` 起）：根据正文语义判断合适的插入位置
+
+### 输出格式
 
 ```markdown
 # 文章标题
@@ -117,49 +122,26 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 ...
 ```
 
-**封面图**：`cover.jpg` 只需下载保存，**不在 Markdown 中插入引用**，供外部调用方使用。
-
-**其余图片插入位置**：由于 X 的 DOM 结构复杂，图片在正文中的精确位置难以稳定获取。
-实用策略：`img-01.jpg` 起，**按照它们在 DOM 中出现的顺序**，穿插在对应段落附近插入。
-
-**噪声清理**：`innerText` 会包含各种 X UI 文字，需识别并过滤。规则：
-- 纯数字行或带 K/M 后缀的数字行（点赞数、转发数等）
-- 与标题完全重复的行
-- 作者名和 @handle 独占一行（已在 header 里出现过）
-- 时间戳行，如 `6:57 AM · Apr 4, 2026`
-- 单字符分隔符行，如 `·`
-- 以下关键词开头的行：`Reply`、`Repost`、`Like`、`Bookmark`、`Share`、`Views`、`Follow`、`Relevant`、`View quotes`、`Want to publish`、`Upgrade to Premium`、`Paid partnership`
-
 ---
 
-## 第七步：保存结果校验
+## 第六步：保存结果校验
 
-脚本执行完成后，对输出内容做以下检查：
+AI 生成 `article.md` 后，检查以下项目：
 
 ### 标题
-- 是否为文章实际标题，而非作者名、`(1) AuthorName` 等无关内容
-- 是否完整，没有被截断
+- 是否为文章实际标题（非作者名、非 `(1) AuthorName` 等）
+- 是否完整，未被截断
 
 ### 正文
-- 正文是否有实质内容（非空）
-- 图片引用是否正常（`![Image](images/img-xx.jpg)` 格式）
-- 图片文件是否实际存在于 `images/` 目录中
+- 是否有实质内容（非空）
+- 图片引用格式是否正确（`![Image](images/img-xx.jpg)`）
+- 图片文件是否实际存在于 `images/` 目录
 
-### 末尾噪声
-检查 `article.md` 末尾几行，确认没有以下内容残留：
-- 时间戳（如 `6:57 AM · Apr 4, 2026`）
-- `Want to publish your own Article?`、`Upgrade to Premium`、`Paid partnership`
-- `Relevant`、`View quotes`
-- 单个 `·` 符号
+### 末尾
+- 确认没有 X UI 噪声残留
 
 ### 封面图
-- `images/cover.jpg` 文件是否存在
-- 文件大小是否正常（非 0 字节，非极小文件）
-
-### 发现问题时
-- **标题错误**：检查 `og:title` 解析逻辑，或 X 的 DOM 结构是否有变更
-- **图片缺失**：重新执行并确保目标标签页在滚动阶段保持激活状态
-- **末尾有噪声**：将新出现的噪声模式补充到过滤规则，并更新手册中的脚本代码块
+- `images/cover.jpg` 是否存在且文件大小正常（非 0 字节）
 
 ---
 
@@ -194,11 +176,13 @@ node /tmp/2040202068091142208/.code/save-x-article.js \
 node --check /tmp/{status_id}/.code/save-x-article.js
 ```
 
-若脚本不存在或校验失败，则从手册末尾的代码块重新写入。若运行时出现提取异常（图片为 0、正文为空等），说明 X 的 DOM 结构已变更，需根据实际情况动态修复并更新手册中的代码块。
+若脚本不存在或校验失败，则从手册末尾的代码块重新写入。
 
 ---
 
 ## 脚本代码
+
+脚本只负责机械操作：导航、滚动、提取原始文本、下载图片、写文件。不做任何语义处理。
 
 ```javascript
 // save-x-article.js
@@ -295,14 +279,14 @@ async function main() {
   await send('Page.enable');
   await send('Runtime.enable');
 
-  // 第一步：导航到文章
+  // 导航到文章
   console.log('Navigating to article...');
   await send('Page.navigate', { url: ARTICLE_URL });
   await waitEvent('Page.loadEventFired');
   console.log('Page loaded, waiting for React render...');
   await sleep(4000);
 
-  // 第二步：滚动触发懒加载
+  // 滚动触发懒加载
   console.log('Scrolling to trigger lazy loading...');
   await send('Runtime.evaluate', {
     expression: `(async () => {
@@ -322,74 +306,16 @@ async function main() {
   });
   await sleep(2000);
 
-  // 第三步：提取元数据
-  console.log('Extracting metadata...');
-  const { result: { value: meta } } = await send('Runtime.evaluate', {
-    expression: `(() => {
-      const h1El = document.querySelector('article h1');
-      const ogTitle = (document.querySelector('meta[property="og:title"]') || {}).content || '';
-      const ogMatch = ogTitle.match(/on X:\\s*[\\u201c""](.+?)[\\u201d""](?:\\s*\\/\\s*X)?$/);
-      const articleEl = document.querySelector('main article');
-      const firstLine = articleEl
-        ? (articleEl.innerText || '').split('\\n').map(l => l.trim()).find(l => l.length > 10)
-        : '';
-      const title = h1El
-        ? h1El.innerText.trim()
-        : ogMatch
-          ? ogMatch[1].trim()
-          : (firstLine || '');
-      return {
-        title,
-        published: (document.querySelector('article time') || {}).getAttribute?.('datetime') || '',
-        author: (document.querySelector('[data-testid="User-Name"]') || {}).innerText?.trim() || '',
-      };
-    })()`,
-    returnByValue: true,
-  });
-  console.log('Meta:', JSON.stringify(meta));
-
-  // 第四步：提取正文
-  // 用 placeholder 临时替换 pre 元素，借助浏览器 innerText 保留行内格式，再还原为 markdown 代码块
+  // 提取原始文本（不做任何处理）
   const { result: { value: rawText } } = await send('Runtime.evaluate', {
     expression: `(() => {
-      const article = document.querySelector('main article');
-      if (!article) return document.body.innerText;
-
-      const saved = [];
-      article.querySelectorAll('pre').forEach((pre, i) => {
-        const code = pre.querySelector('code');
-        const lang = (code?.className || '').replace('language-', '').trim();
-        const content = (code || pre).textContent.replace(/\\n$/, '');
-        // 隐藏 pre 前的语言标签 div（X Article 自动渲染的语言名称）
-        const prev = pre.previousElementSibling;
-        const labelEl = (prev && prev.innerText.trim().toLowerCase() === lang.toLowerCase()) ? prev : null;
-        if (labelEl) labelEl.style.display = 'none';
-        // 替换 pre 为 placeholder
-        const ph = document.createElement('div');
-        ph.textContent = '___CODE_' + i + '___';
-        pre.replaceWith(ph);
-        saved.push({ pre, ph, lang, content, labelEl });
-      });
-
-      let text = article.innerText;
-
-      // 还原 DOM
-      saved.forEach(({ pre, ph, labelEl }) => {
-        ph.replaceWith(pre);
-        if (labelEl) labelEl.style.display = '';
-      });
-
-      // 将 placeholder 替换为 markdown 代码块
-      saved.forEach(({ lang, content }, i) => {
-        text = text.replace('___CODE_' + i + '___', '\\n\`\`\`' + lang + '\\n' + content + '\\n\`\`\`');
-      });
-
-      return text;
+      const el = document.querySelector('main article');
+      return el ? el.innerText : document.body.innerText;
     })()`,
     returnByValue: true,
   });
 
-  // 第五步：提取图片
+  // 提取图片 URL
   const { result: { value: imageUrls } } = await send('Runtime.evaluate', {
     expression: `(() => {
       const seen = new Set();
@@ -407,78 +333,30 @@ async function main() {
   });
   console.log(`Found ${imageUrls.length} images`);
 
-  // 第六步：清理正文噪声
-  const titleLine = meta.title || '';
-  const authorLines = meta.author ? meta.author.split('\n').map(l => l.trim()) : [];
-  const cleanLines = (rawText || '').split('\n').filter(line => {
-    const t = line.trim();
-    if (!t) return false;
-    // 纯数字/统计行，如 "28 79 795 372K"
-    if (/^[\d\s.,KMB%]+$/.test(t)) return false;
-    // 标题重复行
-    if (t === titleLine) return false;
-    // 作者信息行
-    if (authorLines.includes(t)) return false;
-    // 时间戳行，如 "6:57 AM · Apr 4, 2026"
-    if (/^\d{1,2}:\d{2}\s+(AM|PM)/i.test(t)) return false;
-    // 单个分隔符
-    if (/^[·•\-|]+$/.test(t)) return false;
-    // X UI 噪声关键词（包含匹配，不要求精确）
-    if (/^(Reply|Repost|Like|Bookmark|Share|Views|Follow|Following|Followers|Likes|Reposts|Quotes|Relevant|View quotes|Want to publish|Upgrade to Premium|Paid partnership)/i.test(t)) return false;
-    return true;
-  });
-
-  // 第七步：下载图片
+  // 下载图片
   fs.mkdirSync(IMAGES_DIR, { recursive: true });
   console.log('Downloading images...');
-  const localImages = [];
+  const imageMap = [];
   for (let i = 0; i < imageUrls.length; i++) {
     const filename = i === 0 ? 'cover.jpg' : `img-${String(i).padStart(2, '0')}.jpg`;
     const dest = path.join(IMAGES_DIR, filename);
     try {
       await downloadFile(imageUrls[i], dest);
-      localImages.push(filename);
+      imageMap.push({ url: imageUrls[i], file: filename });
       console.log(`  Downloaded: ${filename}`);
     } catch (err) {
       console.error(`  Failed: ${filename} — ${err.message}`);
     }
   }
 
-  // 第八步：生成 Markdown
-  const authorParts = meta.author.split('\n');
-  const displayName = authorParts[0] || 'Unknown';
-  const handle = authorParts.find(p => p.startsWith('@')) || '';
-  const handleClean = handle.replace('@', '');
-  const publishedDate = meta.published ? meta.published.split('T')[0] : '';
+  // 写入原始数据文件
+  fs.writeFileSync(path.join(OUT_DIR, 'raw.txt'), rawText || '', 'utf8');
+  fs.writeFileSync(path.join(OUT_DIR, 'images.json'), JSON.stringify(imageMap, null, 2), 'utf8');
 
-  let md = `# ${titleLine || 'X Article'}\n\n`;
-  md += `**Author:** ${displayName}${handle ? ` ([${handle}](https://x.com/${handleClean}))` : ''}\n`;
-  md += `**Published:** ${publishedDate}\n`;
-  md += `**Source:** ${ARTICLE_URL}\n\n`;
-
-  // 封面图只保存文件，不写入 markdown
-  const restImages = localImages.slice(1);
-  const chunkSize = restImages.length > 0
-    ? Math.floor(cleanLines.length / (restImages.length + 1))
-    : cleanLines.length;
-
-  let imgIdx = 0;
-  for (let i = 0; i < cleanLines.length; i++) {
-    md += cleanLines[i] + '\n';
-    if (restImages.length > 0 && (i + 1) % chunkSize === 0 && imgIdx < restImages.length) {
-      md += `\n![Image](images/${restImages[imgIdx]})\n\n`;
-      imgIdx++;
-    }
-  }
-  while (imgIdx < restImages.length) {
-    md += `\n![Image](images/${restImages[imgIdx]})\n`;
-    imgIdx++;
-  }
-
-  fs.writeFileSync(path.join(OUT_DIR, 'article.md'), md, 'utf8');
   console.log(`\nDone!`);
-  console.log(`Article: ${OUT_DIR}/article.md`);
-  console.log(`Images:  ${IMAGES_DIR}/ (${localImages.length} files, cover: cover.jpg)`);
+  console.log(`Raw text: ${OUT_DIR}/raw.txt`);
+  console.log(`Images:   ${IMAGES_DIR}/ (${imageMap.length} files)`);
+  console.log(`Next: AI reads raw.txt and images.json to generate article.md`);
 
   ws.close();
 }
@@ -495,8 +373,7 @@ main().catch(err => {
 
 | 问题 | 原因 | 应对 |
 |------|------|------|
-| 图片数量比实际少 | 滚动不够，懒加载未触发 | 确保滚到页面最底部，并等待足够时间 |
-| 文字连在一起没有换行 | X 用大量 `<span>` 嵌套，`innerText` 层级处理不对 | 用 article 级别的 `innerText` 而非逐节点遍历 |
+| 图片数量比实际少 | 滚动阶段标签页不在前台，懒加载未触发 | 确保目标标签页保持激活，滚到页面最底部后再等待 |
 | 选择器失效 | X 频繁更新 DOM 结构 | 降级到 `document.body.innerText` + 全量 img 标签 |
-| 图片下载失败 | X 图片需要合法 Referer 或 UA | 加 `User-Agent: Mozilla/5.0` 请求头 |
+| 图片下载失败 | X 图片需要合法 Referer 或 UA | 已在脚本中加入 `User-Agent` 和 `Referer` 请求头 |
 | 页面需要登录才能看 | X 部分内容需登录 | 确保 Chrome 已登录 X 账号 |
