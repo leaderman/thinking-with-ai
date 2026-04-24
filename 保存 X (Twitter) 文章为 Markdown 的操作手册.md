@@ -41,12 +41,13 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 ## 第四步：提取页面内容
 
 ### 文字内容
-使用 DOM 递归遍历（而非直接读取 `innerText`），以便正确处理代码块：
+使用 **placeholder 替换法**提取正文，兼顾行内格式与代码块还原：
 
-- 遇到 `<pre><code class="language-xxx">` 元素时，转为 markdown 代码块（` ```xxx ... ``` `）
-- X Article 会在 `<pre>` 前渲染一个语言标签 `<div>`（如 `bash`），遍历时识别并跳过，避免出现在正文中
-- 其余节点按块级/行内元素规则拼接文本
-- 降级：找不到 `main article` 时使用 `document.body.innerText`
+1. 找到所有 `<pre>` 元素，临时替换为 `___CODE_N___` 占位节点；同时隐藏 X Article 在 `<pre>` 前渲染的语言标签 `<div>`（如 `bash`）
+2. 对 `article` 调用 `innerText`（浏览器负责正确处理行内元素、链接、金额等）
+3. 还原 DOM（`<pre>` 复位、语言标签 div 恢复显示）
+4. 将 placeholder 替换为 markdown 代码块（` ```lang\n...\n``` `）
+5. 降级：找不到 `main article` 时使用 `document.body.innerText`
 
 ### 图片列表
 用 `querySelectorAll('img')` 获取页面上所有图片，过滤条件：
@@ -347,50 +348,43 @@ async function main() {
   });
   console.log('Meta:', JSON.stringify(meta));
 
-  // 第四步：提取正文（DOM walker，保留代码块格式）
+  // 第四步：提取正文
+  // 用 placeholder 临时替换 pre 元素，借助浏览器 innerText 保留行内格式，再还原为 markdown 代码块
   const { result: { value: rawText } } = await send('Runtime.evaluate', {
     expression: `(() => {
-      const BLOCK = new Set(['p','div','article','section','main','header','footer',
-        'h1','h2','h3','h4','h5','h6','li','ul','ol','blockquote','tr','br']);
-
       const article = document.querySelector('main article');
       if (!article) return document.body.innerText;
 
-      // 标记 pre 前的语言标签 div（X Article 会在代码块前渲染语言名称），遍历时跳过
-      article.querySelectorAll('pre').forEach(pre => {
+      const saved = [];
+      article.querySelectorAll('pre').forEach((pre, i) => {
+        const code = pre.querySelector('code');
+        const lang = (code?.className || '').replace('language-', '').trim();
+        const content = (code || pre).textContent.replace(/\\n$/, '');
+        // 隐藏 pre 前的语言标签 div（X Article 自动渲染的语言名称）
         const prev = pre.previousElementSibling;
-        if (prev) {
-          const code = pre.querySelector('code');
-          const lang = (code?.className || '').replace('language-', '').trim();
-          if (prev.innerText.trim().toLowerCase() === lang.toLowerCase()) {
-            prev.setAttribute('data-md-skip', '1');
-          }
-        }
+        const labelEl = (prev && prev.innerText.trim().toLowerCase() === lang.toLowerCase()) ? prev : null;
+        if (labelEl) labelEl.style.display = 'none';
+        // 替换 pre 为 placeholder
+        const ph = document.createElement('div');
+        ph.textContent = '___CODE_' + i + '___';
+        pre.replaceWith(ph);
+        saved.push({ pre, ph, lang, content, labelEl });
       });
 
-      function toMd(node) {
-        if (!node) return '';
-        if (node.nodeType === 3) return node.textContent;
-        const tag = node.tagName?.toLowerCase();
-        if (!tag) return '';
-        if (tag === 'script' || tag === 'style') return '';
-        if (node.getAttribute?.('data-md-skip') === '1') return '';
-        if (tag === 'pre') {
-          const code = node.querySelector('code');
-          const lang = (code?.className || '').replace('language-', '').trim();
-          const content = (code || node).textContent.replace(/\\n$/, '');
-          return '\\n\`\`\`' + lang + '\\n' + content + '\\n\`\`\`\\n';
-        }
-        if (tag === 'code' && node.closest('pre')) return '';
-        const inner = Array.from(node.childNodes).map(toMd).join('');
-        if (tag === 'br') return '\\n';
-        if (BLOCK.has(tag)) return '\\n' + inner + '\\n';
-        return inner;
-      }
+      let text = article.innerText;
 
-      const raw = toMd(article);
-      article.querySelectorAll('[data-md-skip]').forEach(el => el.removeAttribute('data-md-skip'));
-      return raw.replace(/\\n{3,}/g, '\\n\\n').trim();
+      // 还原 DOM
+      saved.forEach(({ pre, ph, labelEl }) => {
+        ph.replaceWith(pre);
+        if (labelEl) labelEl.style.display = '';
+      });
+
+      // 将 placeholder 替换为 markdown 代码块
+      saved.forEach(({ lang, content }, i) => {
+        text = text.replace('___CODE_' + i + '___', '\\n\`\`\`' + lang + '\\n' + content + '\\n\`\`\`');
+      });
+
+      return text;
     })()`,
     returnByValue: true,
   });
