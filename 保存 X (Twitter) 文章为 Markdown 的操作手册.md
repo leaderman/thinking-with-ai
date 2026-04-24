@@ -55,7 +55,9 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 /tmp/{status_id}/
 ├── .code/
 │   └── save-x-article.js   ← 执行脚本（隐藏目录）
-├── raw.json                 ← 文字与图片的交替有序序列
+├── raw.json                 ← 文字与图片的交替有序序列（innerText）
+├── article-clean.html       ← 清洗后的语义 HTML（去掉所有 class/style/data 属性）
+├── article-raw.html         ← 原始 HTML（未经任何处理）
 ├── article.md               ← 由 AI 生成（下一步）
 ├── images/
 │   ├── cover.jpg            ← 封面图（第一张图，只保存不引用）
@@ -105,7 +107,14 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 
 ## 第五步：AI 处理原始数据，生成 Markdown
 
-AI 读取 `raw.json` 生成 `article.md`。`screenshots/` 目录作为视觉参考资料，AI 可在整个处理过程中按需取用：处理文本时遇到不确定的地方可查截图确认，最后校验格式时也可拿截图与原文对照。不规定具体在哪步参考，由 AI 自行判断。
+AI 读取以下数据生成 `article.md`，按需取用，不限制使用顺序：
+
+| 文件 | 内容 | 主要用途 |
+|------|------|------|
+| `raw.json` | innerText 文字序列 + 图片位置 | 读正文内容、确定图片插入位置 |
+| `article-clean.html` | 清洗后的语义 HTML | 判断格式结构（有序/无序列表、粗体、引用块等） |
+| `article-raw.html` | 原始 HTML | 清洗版有歧义时的终极参考 |
+| `screenshots/` | 按滚动顺序的页面截图 | 视觉验证格式、校验结果 |
 
 ### AI 负责的工作
 
@@ -407,15 +416,44 @@ async function main() {
     }
   }
 
-  // 写入 raw.json
+  // 提取 HTML（原始 + 清洗后的语义版本）
+  const { result: { value: htmlData } } = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const article = document.querySelector('main article') || document.body;
+      const rawHtml = article.innerHTML;
+
+      // 清洗 HTML：只保留语义标签，去掉所有 class/style/data-*/aria-* 属性
+      const clone = article.cloneNode(true);
+      clone.querySelectorAll('*').forEach(el => {
+        const keep = ['href', 'src', 'alt', 'type'];
+        Array.from(el.attributes).forEach(attr => {
+          if (!keep.includes(attr.name)) el.removeAttribute(attr.name);
+        });
+      });
+      // 移除 script/style 节点
+      clone.querySelectorAll('script, style, noscript').forEach(el => el.remove());
+      const cleanHtml = clone.innerHTML;
+
+      return JSON.stringify({ rawHtml, cleanHtml });
+    })()`,
+    returnByValue: true,
+  });
+
+  const { rawHtml, cleanHtml } = JSON.parse(htmlData);
+
+  // 写入所有原始数据文件
   const raw = { url: ARTICLE_URL, sequence };
   fs.writeFileSync(path.join(OUT_DIR, 'raw.json'), JSON.stringify(raw, null, 2), 'utf8');
+  fs.writeFileSync(path.join(OUT_DIR, 'article-clean.html'), cleanHtml, 'utf8');
+  fs.writeFileSync(path.join(OUT_DIR, 'article-raw.html'), rawHtml, 'utf8');
 
   console.log(`\nDone!`);
-  console.log(`Raw data:    ${OUT_DIR}/raw.json`);
-  console.log(`Images:      ${IMAGES_DIR}/ (${Object.keys(fileMap).length} files)`);
-  console.log(`Screenshots: ${SCREENSHOTS_DIR}/ (${shotIdx} files)`);
-  console.log(`Next: AI reads raw.json (+ screenshots/ as needed) to generate article.md`);
+  console.log(`raw.json:          ${OUT_DIR}/raw.json`);
+  console.log(`article-clean.html: ${OUT_DIR}/article-clean.html`);
+  console.log(`article-raw.html:   ${OUT_DIR}/article-raw.html`);
+  console.log(`Images:            ${IMAGES_DIR}/ (${Object.keys(fileMap).length} files)`);
+  console.log(`Screenshots:       ${SCREENSHOTS_DIR}/ (${shotIdx} files)`);
+  console.log(`Next: AI reads raw.json + article-clean.html (+ others as needed) to generate article.md`);
 
   ws.close();
 }
