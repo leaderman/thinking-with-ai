@@ -60,7 +60,7 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 下载时将 `name=small` / `name=medium` 替换为 `name=large` 获取高清版本。
 
 ### 元数据
-- 标题：优先读 `<meta property="og:title">` 的 content
+- 标题：优先读文章内 `article h1` 元素的文字（X Article 长文有独立标题）；若不存在则取 `article.innerText` 第一条长度 > 10 的非空行作为标题
 - 发布时间：读文章内 `<time>` 元素的 `datetime` 属性
 - 作者：读 `[data-testid="User-Name"]` 区域的文字（这个 testid 相对稳定）
 
