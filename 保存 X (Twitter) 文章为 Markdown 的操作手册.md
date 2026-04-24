@@ -72,9 +72,11 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 
 ```
 /tmp/{status_id}/
+├── .code/
+│   └── save-x-article.js   ← 执行脚本（隐藏目录）
 ├── article.md
 └── images/
-    ├── cover.jpg       ← 封面图（第一张图）
+    ├── cover.jpg            ← 封面图（第一张图）
     ├── img-01.jpg
     ├── img-02.jpg
     └── ...
@@ -124,21 +126,21 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 
 ### 脚本位置
 
-脚本以代码块形式保存在本手册末尾。执行前先将其写入隐藏目录：
+脚本以代码块形式保存在本手册末尾。执行前先将其写入文章目录下的隐藏目录：
 
 ```bash
-mkdir -p /tmp/.code
+mkdir -p /tmp/{status_id}/.code
 # 将下方代码块内容写入：
-# /tmp/.code/save-x-article.js
+# /tmp/{status_id}/.code/save-x-article.js
 ```
 
 ### 运行方式
 
 ```bash
-# 用法：node /tmp/.code/save-x-article.js <文章URL> <CDP WebSocket地址>
+# 用法：node /tmp/{status_id}/.code/save-x-article.js <文章URL> <CDP WebSocket地址>
 # CDP WebSocket地址 从 http://localhost:9222/json/list 的 webSocketDebuggerUrl 字段获取
 
-node /tmp/.code/save-x-article.js \
+node /tmp/2040202068091142208/.code/save-x-article.js \
   "https://x.com/Jahjiren/status/2040202068091142208" \
   "ws://localhost:9222/devtools/page/XXXX"
 ```
@@ -148,7 +150,7 @@ node /tmp/.code/save-x-article.js \
 执行前用以下命令验证脚本语法完好：
 
 ```bash
-node --check /tmp/.code/save-x-article.js
+node --check /tmp/{status_id}/.code/save-x-article.js
 ```
 
 若脚本不存在或校验失败，则从手册末尾的代码块重新写入。若运行时出现提取异常（图片为 0、正文为空等），说明 X 的 DOM 结构已变更，需根据实际情况动态修复并更新手册中的代码块。
