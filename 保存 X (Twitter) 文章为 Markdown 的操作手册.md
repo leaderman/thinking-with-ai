@@ -3,7 +3,7 @@
 ## 前提条件
 
 - Chrome 已开启 CDP，默认端口 9222
-- 当前目录有 Node.js 临时项目可用（`/private/tmp/cdp-tool/`，已安装 `ws` 包）
+- Node.js >= 21（内置 `WebSocket`，无需任何第三方包）
 
 ---
 
