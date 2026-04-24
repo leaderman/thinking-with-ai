@@ -55,8 +55,7 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 /tmp/{status_id}/
 ├── .code/
 │   └── save-x-article.js   ← 执行脚本（隐藏目录）
-├── raw.txt                  ← 页面原始文本（article.innerText，未经任何处理）
-├── images.json              ← 图片 URL 列表及本地文件名映射
+├── raw.json                 ← 文字与图片的交替有序序列
 ├── article.md               ← 由 AI 生成（下一步）
 └── images/
     ├── cover.jpg            ← 封面图（第一张图，只保存不引用）
@@ -65,17 +64,39 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
     └── ...
 ```
 
-- `raw.txt`：直接写入 `article.innerText`，不做任何过滤或格式化
-- `images.json`：格式为 `[{ "url": "...", "file": "cover.jpg" }, ...]`
-- 图片 URL 中 `name=small` / `name=medium` 替换为 `name=large` 获取高清版本
-- 下载时带上 `User-Agent` 和 `Referer: https://x.com/` 请求头
+### raw.json 格式
 
-### 图片过滤规则（代码执行，规则固定）
+按 DOM 顺序记录文字块和图片的交替序列，保留图片在正文中的原始位置：
+
+```json
+{
+  "url": "https://x.com/...",
+  "sequence": [
+    { "type": "text", "content": "段落文字..." },
+    { "type": "image", "file": "cover.jpg" },
+    { "type": "text", "content": "继续正文..." },
+    { "type": "image", "file": "img-01.jpg" },
+    { "type": "text", "content": "更多正文..." }
+  ]
+}
+```
+
+### 图片提取方式（代码执行）
+
+用 placeholder 替换法保留图片位置信息：
+1. 找到所有符合条件的 `<img>` 元素，在原位置替换为 `___IMG_N___` 文本占位符
+2. 对 article 调用 `innerText`（占位符出现在正确位置）
+3. 还原 DOM
+4. 按占位符分割文本，得到文字块与图片的交替序列
+
+### 图片过滤规则（规则固定，代码执行）
 - `src` 不为空，且不是 `data:` base64 图
 - 不含 `profile_images`（头像）
 - 不含 `emoji`（表情）
 - 宽度大于 80px（排除像素追踪图）
 - 对 src 去重
+
+图片 URL 中 `name=small` / `name=medium` 替换为 `name=large` 获取高清版本，下载时带上 `User-Agent` 和 `Referer: https://x.com/` 请求头。
 
 ---
 
@@ -102,8 +123,9 @@ AI 读取 `raw.txt` 和 `images.json`，生成 `article.md`。
 - 代码块内容保持原样，不转义
 
 **图片插入**
-- 封面图（`cover.jpg`）：不写入 Markdown，仅保存文件
-- 其余图片（`img-01.jpg` 起）：根据正文语义判断合适的插入位置
+- `raw.json` 的 `sequence` 已按 DOM 顺序记录文字块和图片的交替位置，AI 直接按顺序组装即可
+- 封面图（`cover.jpg`）：跳过，不写入 Markdown
+- 其余图片（`img-01.jpg` 起）：按 sequence 中的位置插入对应文字块之间
 
 ### 输出格式
 
@@ -306,57 +328,78 @@ async function main() {
   });
   await sleep(2000);
 
-  // 提取原始文本（不做任何处理）
-  const { result: { value: rawText } } = await send('Runtime.evaluate', {
+  // 提取文字与图片的交替序列（保留图片在正文中的原始位置）
+  const { result: { value: extracted } } = await send('Runtime.evaluate', {
     expression: `(() => {
-      const el = document.querySelector('main article');
-      return el ? el.innerText : document.body.innerText;
+      const article = document.querySelector('main article') || document.body;
+      const seen = new Set();
+      const saved = [];
+
+      // 找到所有符合条件的图片，替换为占位符
+      Array.from(article.querySelectorAll('img')).forEach(img => {
+        const src = img.src || '';
+        if (!src || src.startsWith('data:')) return;
+        if (src.includes('profile_images') || src.includes('emoji')) return;
+        if (img.width <= 80) return;
+        if (seen.has(src)) return;
+        seen.add(src);
+        const i = saved.length;
+        const ph = document.createElement('span');
+        ph.textContent = ' ___IMG_' + i + '___ ';
+        img.replaceWith(ph);
+        saved.push({ img, ph, url: src });
+      });
+
+      // 获取包含占位符的文本
+      const text = article.innerText;
+
+      // 还原 DOM
+      saved.forEach(({ img, ph }) => ph.replaceWith(img));
+
+      return JSON.stringify({ text, count: saved.length, urls: saved.map(s => s.url) });
     })()`,
     returnByValue: true,
   });
 
-  // 提取图片 URL
-  const { result: { value: imageUrls } } = await send('Runtime.evaluate', {
-    expression: `(() => {
-      const seen = new Set();
-      return Array.from(document.querySelectorAll('img')).filter(img => {
-        const src = img.src || '';
-        if (!src || src.startsWith('data:')) return false;
-        if (src.includes('profile_images') || src.includes('emoji')) return false;
-        if (img.width <= 80) return false;
-        if (seen.has(src)) return false;
-        seen.add(src);
-        return true;
-      }).map(img => img.src);
-    })()`,
-    returnByValue: true,
-  });
+  const { text: rawText, urls: imageUrls } = JSON.parse(extracted);
   console.log(`Found ${imageUrls.length} images`);
 
   // 下载图片
   fs.mkdirSync(IMAGES_DIR, { recursive: true });
   console.log('Downloading images...');
-  const imageMap = [];
+  const fileMap = {};
   for (let i = 0; i < imageUrls.length; i++) {
     const filename = i === 0 ? 'cover.jpg' : `img-${String(i).padStart(2, '0')}.jpg`;
     const dest = path.join(IMAGES_DIR, filename);
     try {
       await downloadFile(imageUrls[i], dest);
-      imageMap.push({ url: imageUrls[i], file: filename });
+      fileMap[i] = filename;
       console.log(`  Downloaded: ${filename}`);
     } catch (err) {
-      console.error(`  Failed: ${filename} — ${err.message}`);
+      console.error(`  Failed: img ${i} — ${err.message}`);
     }
   }
 
-  // 写入原始数据文件
-  fs.writeFileSync(path.join(OUT_DIR, 'raw.txt'), rawText || '', 'utf8');
-  fs.writeFileSync(path.join(OUT_DIR, 'images.json'), JSON.stringify(imageMap, null, 2), 'utf8');
+  // 按占位符分割，构建文字与图片的交替序列
+  const parts = rawText.split(/\s*___IMG_(\d+)___\s*/);
+  const sequence = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      if (parts[i].trim()) sequence.push({ type: 'text', content: parts[i] });
+    } else {
+      const idx = parseInt(parts[i]);
+      if (fileMap[idx]) sequence.push({ type: 'image', file: fileMap[idx] });
+    }
+  }
+
+  // 写入 raw.json
+  const raw = { url: ARTICLE_URL, sequence };
+  fs.writeFileSync(path.join(OUT_DIR, 'raw.json'), JSON.stringify(raw, null, 2), 'utf8');
 
   console.log(`\nDone!`);
-  console.log(`Raw text: ${OUT_DIR}/raw.txt`);
-  console.log(`Images:   ${IMAGES_DIR}/ (${imageMap.length} files)`);
-  console.log(`Next: AI reads raw.txt and images.json to generate article.md`);
+  console.log(`Raw data: ${OUT_DIR}/raw.json`);
+  console.log(`Images:   ${IMAGES_DIR}/ (${Object.keys(fileMap).length} files)`);
+  console.log(`Next: AI reads raw.json to generate article.md`);
 
   ws.close();
 }
