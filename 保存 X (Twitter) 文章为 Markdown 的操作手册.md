@@ -35,11 +35,11 @@ X 是单页应用，加载分两个阶段：
 
 ---
 
-## 第三步：滚动页面，触发懒加载图片
+## 第三步：滚动页面，触发懒加载图片 + 截图
 
 X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DOM。
 
-操作方式：用 `Runtime.evaluate` 注入 JS，从页面顶部开始，每次滚动约 80% 视口高度，每步间隔 300ms，一直滚到页面底部，再滚回顶部。
+操作方式：用 `Runtime.evaluate` 注入 JS，从页面顶部开始，每次滚动约 80% 视口高度，每步间隔 300ms，一直滚到页面底部，再滚回顶部。**每滚动一步，用 `Page.captureScreenshot` 截取当前视口**，按顺序保存到 `screenshots/` 目录（`shot-00.jpg`、`shot-01.jpg`……）。
 
 滚动完成后再等待 **1～2 秒**，让图片请求完成。
 
@@ -57,10 +57,13 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 │   └── save-x-article.js   ← 执行脚本（隐藏目录）
 ├── raw.json                 ← 文字与图片的交替有序序列
 ├── article.md               ← 由 AI 生成（下一步）
-└── images/
-    ├── cover.jpg            ← 封面图（第一张图，只保存不引用）
-    ├── img-01.jpg
-    ├── img-02.jpg
+├── images/
+│   ├── cover.jpg            ← 封面图（第一张图，只保存不引用）
+│   ├── img-01.jpg
+│   └── ...
+└── screenshots/
+    ├── shot-00.jpg          ← 按滚动顺序的页面截图
+    ├── shot-01.jpg
     └── ...
 ```
 
@@ -102,7 +105,7 @@ X 的文章图片全部懒加载，必须滚动到图片位置才会加载进 DO
 
 ## 第五步：AI 处理原始数据，生成 Markdown
 
-AI 读取 `raw.txt` 和 `images.json`，生成 `article.md`。
+AI 读取 `raw.json` 生成 `article.md`。`screenshots/` 目录作为视觉参考资料，AI 可在整个处理过程中按需取用：处理文本时遇到不确定的地方可查截图确认，最后校验格式时也可拿截图与原文对照。不规定具体在哪步参考，由 AI 自行判断。
 
 ### AI 负责的工作
 
@@ -231,6 +234,7 @@ if (!STATUS_ID) {
 
 const OUT_DIR = `/tmp/${STATUS_ID}`;
 const IMAGES_DIR = path.join(OUT_DIR, 'images');
+const SCREENSHOTS_DIR = path.join(OUT_DIR, 'screenshots');
 
 let msgId = 1;
 const pending = new Map();
@@ -308,24 +312,35 @@ async function main() {
   console.log('Page loaded, waiting for React render...');
   await sleep(4000);
 
-  // 滚动触发懒加载
-  console.log('Scrolling to trigger lazy loading...');
-  await send('Runtime.evaluate', {
-    expression: `(async () => {
-      const delay = ms => new Promise(r => setTimeout(r, ms));
-      const step = Math.floor(window.innerHeight * 0.8);
-      let pos = 0;
-      while (pos < document.body.scrollHeight) {
-        window.scrollTo(0, pos);
-        await delay(300);
-        pos += step;
-      }
-      window.scrollTo(0, 0);
-      await delay(1500);
-    })()`,
-    awaitPromise: true,
-    timeout: 30000,
+  // 滚动触发懒加载，同时截图
+  console.log('Scrolling and taking screenshots...');
+  fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+
+  const { result: { value: pageInfo } } = await send('Runtime.evaluate', {
+    expression: `({ scrollHeight: document.body.scrollHeight, viewHeight: window.innerHeight })`,
+    returnByValue: true,
   });
+
+  const step = Math.floor(pageInfo.viewHeight * 0.8);
+  let pos = 0;
+  let shotIdx = 0;
+
+  while (pos < pageInfo.scrollHeight) {
+    await send('Runtime.evaluate', {
+      expression: `window.scrollTo(0, ${pos})`,
+      returnByValue: true,
+    });
+    await sleep(300);
+
+    const shot = await send('Page.captureScreenshot', { format: 'jpeg', quality: 80 });
+    const shotFile = path.join(SCREENSHOTS_DIR, `shot-${String(shotIdx).padStart(2, '0')}.jpg`);
+    fs.writeFileSync(shotFile, Buffer.from(shot.data, 'base64'));
+    shotIdx++;
+    pos += step;
+  }
+
+  await send('Runtime.evaluate', { expression: `window.scrollTo(0, 0)`, returnByValue: true });
+  console.log(`Screenshots: ${shotIdx} captured`);
   await sleep(2000);
 
   // 提取文字与图片的交替序列（保留图片在正文中的原始位置）
@@ -397,9 +412,10 @@ async function main() {
   fs.writeFileSync(path.join(OUT_DIR, 'raw.json'), JSON.stringify(raw, null, 2), 'utf8');
 
   console.log(`\nDone!`);
-  console.log(`Raw data: ${OUT_DIR}/raw.json`);
-  console.log(`Images:   ${IMAGES_DIR}/ (${Object.keys(fileMap).length} files)`);
-  console.log(`Next: AI reads raw.json to generate article.md`);
+  console.log(`Raw data:    ${OUT_DIR}/raw.json`);
+  console.log(`Images:      ${IMAGES_DIR}/ (${Object.keys(fileMap).length} files)`);
+  console.log(`Screenshots: ${SCREENSHOTS_DIR}/ (${shotIdx} files)`);
+  console.log(`Next: AI reads raw.json (+ screenshots/ as needed) to generate article.md`);
 
   ws.close();
 }
