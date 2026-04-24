@@ -128,6 +128,37 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 
 ---
 
+## 第七步：保存结果校验
+
+脚本执行完成后，对输出内容做以下检查：
+
+### 标题
+- 是否为文章实际标题，而非作者名、`(1) AuthorName` 等无关内容
+- 是否完整，没有被截断
+
+### 正文
+- 正文是否有实质内容（非空）
+- 图片引用是否正常（`![Image](images/img-xx.jpg)` 格式）
+- 图片文件是否实际存在于 `images/` 目录中
+
+### 末尾噪声
+检查 `article.md` 末尾几行，确认没有以下内容残留：
+- 时间戳（如 `6:57 AM · Apr 4, 2026`）
+- `Want to publish your own Article?`、`Upgrade to Premium`、`Paid partnership`
+- `Relevant`、`View quotes`
+- 单个 `·` 符号
+
+### 封面图
+- `images/cover.jpg` 文件是否存在
+- 文件大小是否正常（非 0 字节，非极小文件）
+
+### 发现问题时
+- **标题错误**：检查 `og:title` 解析逻辑，或 X 的 DOM 结构是否有变更
+- **图片缺失**：重新执行并确保目标标签页在滚动阶段保持激活状态
+- **末尾有噪声**：将新出现的噪声模式补充到过滤规则，并更新手册中的脚本代码块
+
+---
+
 ## 执行脚本
 
 ### 脚本位置
