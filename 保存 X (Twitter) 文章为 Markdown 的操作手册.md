@@ -60,7 +60,10 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 下载时将 `name=small` / `name=medium` 替换为 `name=large` 获取高清版本。
 
 ### 元数据
-- 标题：优先读文章内 `article h1` 元素的文字（X Article 长文有独立标题）；若不存在则取 `article.innerText` 第一条长度 > 10 的非空行作为标题
+- 标题：按以下优先级获取：
+  1. `article h1` 的文字（X Article 长文有独立标题）
+  2. `<meta property="og:title">` 中解析引号内的内容（格式为 `Author on X: "文章标题" / X`）
+  3. 降级：`article.innerText` 第一条长度 > 10 的非空行（注意：第一行可能是作者名，需结合实际验证）
 - 发布时间：读文章内 `<time>` 元素的 `datetime` 属性
 - 作者：读 `[data-testid="User-Name"]` 区域的文字（这个 testid 相对稳定）
 
@@ -289,12 +292,19 @@ async function main() {
   const { result: { value: meta } } = await send('Runtime.evaluate', {
     expression: `(() => {
       const h1El = document.querySelector('article h1');
+      const ogTitle = (document.querySelector('meta[property="og:title"]') || {}).content || '';
+      const ogMatch = ogTitle.match(/on X:\\s*[\\u201c""](.+?)[\\u201d""](?:\\s*\\/\\s*X)?$/);
       const articleEl = document.querySelector('main article');
       const firstLine = articleEl
         ? (articleEl.innerText || '').split('\\n').map(l => l.trim()).find(l => l.length > 10)
         : '';
+      const title = h1El
+        ? h1El.innerText.trim()
+        : ogMatch
+          ? ogMatch[1].trim()
+          : (firstLine || '');
       return {
-        title: h1El ? h1El.innerText.trim() : (firstLine || ''),
+        title,
         published: (document.querySelector('article time') || {}).getAttribute?.('datetime') || '',
         author: (document.querySelector('[data-testid="User-Name"]') || {}).innerText?.trim() || '',
       };
