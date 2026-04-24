@@ -120,6 +120,287 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 
 ---
 
+## 执行脚本
+
+### 脚本位置
+
+脚本以代码块形式保存在本手册末尾。执行前先将其写入隐藏目录：
+
+```bash
+mkdir -p /tmp/.code
+# 将下方代码块内容写入：
+# /tmp/.code/save-x-article.js
+```
+
+### 运行方式
+
+```bash
+# 用法：node /tmp/.code/save-x-article.js <文章URL> <CDP WebSocket地址>
+# CDP WebSocket地址 从 http://localhost:9222/json/list 的 webSocketDebuggerUrl 字段获取
+
+node /tmp/.code/save-x-article.js \
+  "https://x.com/Jahjiren/status/2040202068091142208" \
+  "ws://localhost:9222/devtools/page/XXXX"
+```
+
+### 校验
+
+执行前用以下命令验证脚本语法完好：
+
+```bash
+node --check /tmp/.code/save-x-article.js
+```
+
+若脚本不存在或校验失败，则从手册末尾的代码块重新写入。若运行时出现提取异常（图片为 0、正文为空等），说明 X 的 DOM 结构已变更，需根据实际情况动态修复并更新手册中的代码块。
+
+---
+
+## 脚本代码
+
+```javascript
+// save-x-article.js
+// 用法: node save-x-article.js <article_url> <ws_url>
+// 依赖: Node.js >= 21 (内置 WebSocket，无需第三方包)
+
+import https from 'https';
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { URL } from 'url';
+
+const [,, ARTICLE_URL, WS_URL] = process.argv;
+if (!ARTICLE_URL || !WS_URL) {
+  console.error('用法: node save-x-article.js <article_url> <ws_url>');
+  process.exit(1);
+}
+
+const STATUS_ID = ARTICLE_URL.match(/\/status\/(\d+)/)?.[1];
+if (!STATUS_ID) {
+  console.error('无法从 URL 中解析 status ID:', ARTICLE_URL);
+  process.exit(1);
+}
+
+const OUT_DIR = `/tmp/${STATUS_ID}`;
+const IMAGES_DIR = path.join(OUT_DIR, 'images');
+
+let msgId = 1;
+const pending = new Map();
+const eventWaiters = new Map();
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function downloadFile(url, dest) {
+  return new Promise((resolve, reject) => {
+    url = url.replace(/name=(small|medium|orig)/, 'name=large');
+    const parsed = new URL(url);
+    const client = parsed.protocol === 'https:' ? https : http;
+    const file = fs.createWriteStream(dest);
+    const req = client.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://x.com/',
+      }
+    }, (res) => {
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        file.close();
+        fs.unlinkSync(dest);
+        return downloadFile(res.headers.location, dest).then(resolve).catch(reject);
+      }
+      res.pipe(file);
+      file.on('finish', () => { file.close(); resolve(); });
+    });
+    req.on('error', (err) => { fs.unlink(dest, () => {}); reject(err); });
+  });
+}
+
+async function main() {
+  console.log('Connecting to Chrome CDP...');
+  const ws = new WebSocket(WS_URL);
+
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve);
+    ws.addEventListener('error', (e) => reject(new Error(e.message || 'WebSocket error')));
+  });
+
+  ws.addEventListener('message', (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.id && pending.has(msg.id)) {
+      const { resolve, reject } = pending.get(msg.id);
+      pending.delete(msg.id);
+      if (msg.error) reject(new Error(msg.error.message));
+      else resolve(msg.result);
+    }
+    if (msg.method && eventWaiters.has(msg.method)) {
+      eventWaiters.get(msg.method)(msg.params);
+      eventWaiters.delete(msg.method);
+    }
+  });
+
+  const send = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = msgId++;
+    pending.set(id, { resolve, reject });
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+
+  const waitEvent = (eventName, timeout = 20000) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout: ${eventName}`)), timeout);
+    eventWaiters.set(eventName, (params) => { clearTimeout(timer); resolve(params); });
+  });
+
+  await send('Page.enable');
+  await send('Runtime.enable');
+
+  // 第一步：导航到文章
+  console.log('Navigating to article...');
+  await send('Page.navigate', { url: ARTICLE_URL });
+  await waitEvent('Page.loadEventFired');
+  console.log('Page loaded, waiting for React render...');
+  await sleep(4000);
+
+  // 第二步：滚动触发懒加载
+  console.log('Scrolling to trigger lazy loading...');
+  await send('Runtime.evaluate', {
+    expression: `(async () => {
+      const delay = ms => new Promise(r => setTimeout(r, ms));
+      const step = Math.floor(window.innerHeight * 0.8);
+      let pos = 0;
+      while (pos < document.body.scrollHeight) {
+        window.scrollTo(0, pos);
+        await delay(300);
+        pos += step;
+      }
+      window.scrollTo(0, 0);
+      await delay(1500);
+    })()`,
+    awaitPromise: true,
+    timeout: 30000,
+  });
+  await sleep(2000);
+
+  // 第三步：提取元数据
+  console.log('Extracting metadata...');
+  const { result: { value: meta } } = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const h1El = document.querySelector('article h1');
+      const articleEl = document.querySelector('main article');
+      const firstLine = articleEl
+        ? (articleEl.innerText || '').split('\\n').map(l => l.trim()).find(l => l.length > 10)
+        : '';
+      return {
+        title: h1El ? h1El.innerText.trim() : (firstLine || ''),
+        published: (document.querySelector('article time') || {}).getAttribute?.('datetime') || '',
+        author: (document.querySelector('[data-testid="User-Name"]') || {}).innerText?.trim() || '',
+      };
+    })()`,
+    returnByValue: true,
+  });
+  console.log('Meta:', JSON.stringify(meta));
+
+  // 第四步：提取正文
+  const { result: { value: rawText } } = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const el = document.querySelector('main article');
+      return el ? el.innerText : document.body.innerText;
+    })()`,
+    returnByValue: true,
+  });
+
+  // 第五步：提取图片
+  const { result: { value: imageUrls } } = await send('Runtime.evaluate', {
+    expression: `(() => {
+      const seen = new Set();
+      return Array.from(document.querySelectorAll('img')).filter(img => {
+        const src = img.src || '';
+        if (!src || src.startsWith('data:')) return false;
+        if (src.includes('profile_images') || src.includes('emoji')) return false;
+        if (img.width <= 80) return false;
+        if (seen.has(src)) return false;
+        seen.add(src);
+        return true;
+      }).map(img => img.src);
+    })()`,
+    returnByValue: true,
+  });
+  console.log(`Found ${imageUrls.length} images`);
+
+  // 第六步：清理正文噪声
+  const titleLine = meta.title || '';
+  const authorLines = meta.author ? meta.author.split('\n').map(l => l.trim()) : [];
+  const cleanLines = (rawText || '').split('\n').filter(line => {
+    const t = line.trim();
+    if (!t) return false;
+    if (/^[\d\s.,KMB%]+$/.test(t)) return false;
+    if (t === titleLine) return false;
+    if (authorLines.includes(t)) return false;
+    if (/^(Reply|Repost|Like|Bookmark|Share|Views|Follow|Following|Followers|Likes|Reposts|Quotes|Want to publish|Upgrade to Premium|Paid partnership)$/i.test(t)) return false;
+    return true;
+  });
+
+  // 第七步：下载图片
+  fs.mkdirSync(IMAGES_DIR, { recursive: true });
+  console.log('Downloading images...');
+  const localImages = [];
+  for (let i = 0; i < imageUrls.length; i++) {
+    const filename = i === 0 ? 'cover.jpg' : `img-${String(i).padStart(2, '0')}.jpg`;
+    const dest = path.join(IMAGES_DIR, filename);
+    try {
+      await downloadFile(imageUrls[i], dest);
+      localImages.push(filename);
+      console.log(`  Downloaded: ${filename}`);
+    } catch (err) {
+      console.error(`  Failed: ${filename} — ${err.message}`);
+    }
+  }
+
+  // 第八步：生成 Markdown
+  const authorParts = meta.author.split('\n');
+  const displayName = authorParts[0] || 'Unknown';
+  const handle = authorParts.find(p => p.startsWith('@')) || '';
+  const handleClean = handle.replace('@', '');
+  const publishedDate = meta.published ? meta.published.split('T')[0] : '';
+
+  let md = `# ${titleLine || 'X Article'}\n\n`;
+  md += `**Author:** ${displayName}${handle ? ` ([${handle}](https://x.com/${handleClean}))` : ''}\n`;
+  md += `**Published:** ${publishedDate}\n`;
+  md += `**Source:** ${ARTICLE_URL}\n\n`;
+
+  // 封面图只保存文件，不写入 markdown
+  const restImages = localImages.slice(1);
+  const chunkSize = restImages.length > 0
+    ? Math.floor(cleanLines.length / (restImages.length + 1))
+    : cleanLines.length;
+
+  let imgIdx = 0;
+  for (let i = 0; i < cleanLines.length; i++) {
+    md += cleanLines[i] + '\n';
+    if (restImages.length > 0 && (i + 1) % chunkSize === 0 && imgIdx < restImages.length) {
+      md += `\n![Image](images/${restImages[imgIdx]})\n\n`;
+      imgIdx++;
+    }
+  }
+  while (imgIdx < restImages.length) {
+    md += `\n![Image](images/${restImages[imgIdx]})\n`;
+    imgIdx++;
+  }
+
+  fs.writeFileSync(path.join(OUT_DIR, 'article.md'), md, 'utf8');
+  console.log(`\nDone!`);
+  console.log(`Article: ${OUT_DIR}/article.md`);
+  console.log(`Images:  ${IMAGES_DIR}/ (${localImages.length} files, cover: cover.jpg)`);
+
+  ws.close();
+}
+
+main().catch(err => {
+  console.error('Error:', err.message);
+  process.exit(1);
+});
+```
+
+---
+
 ## 注意事项
 
 | 问题 | 原因 | 应对 |
