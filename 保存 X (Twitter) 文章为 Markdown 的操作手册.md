@@ -115,10 +115,13 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 **其余图片插入位置**：由于 X 的 DOM 结构复杂，图片在正文中的精确位置难以稳定获取。
 实用策略：`img-01.jpg` 起，**按照它们在 DOM 中出现的顺序**，穿插在对应段落附近插入。
 
-**噪声清理**：`innerText` 会包含点赞数、转发数、浏览量等 UI 文字（如 "28 79 795 372K"），以及重复的标题行，需要识别并去掉。判断依据：
-- 纯数字行或带 K/M 后缀的数字行
+**噪声清理**：`innerText` 会包含各种 X UI 文字，需识别并过滤。规则：
+- 纯数字行或带 K/M 后缀的数字行（点赞数、转发数等）
 - 与标题完全重复的行
 - 作者名和 @handle 独占一行（已在 header 里出现过）
+- 时间戳行，如 `6:57 AM · Apr 4, 2026`
+- 单字符分隔符行，如 `·`
+- 以下关键词开头的行：`Reply`、`Repost`、`Like`、`Bookmark`、`Share`、`Views`、`Follow`、`Relevant`、`View quotes`、`Want to publish`、`Upgrade to Premium`、`Paid partnership`
 
 ---
 
@@ -333,10 +336,18 @@ async function main() {
   const cleanLines = (rawText || '').split('\n').filter(line => {
     const t = line.trim();
     if (!t) return false;
+    // 纯数字/统计行，如 "28 79 795 372K"
     if (/^[\d\s.,KMB%]+$/.test(t)) return false;
+    // 标题重复行
     if (t === titleLine) return false;
+    // 作者信息行
     if (authorLines.includes(t)) return false;
-    if (/^(Reply|Repost|Like|Bookmark|Share|Views|Follow|Following|Followers|Likes|Reposts|Quotes|Want to publish|Upgrade to Premium|Paid partnership)$/i.test(t)) return false;
+    // 时间戳行，如 "6:57 AM · Apr 4, 2026"
+    if (/^\d{1,2}:\d{2}\s+(AM|PM)/i.test(t)) return false;
+    // 单个分隔符
+    if (/^[·•\-|]+$/.test(t)) return false;
+    // X UI 噪声关键词（包含匹配，不要求精确）
+    if (/^(Reply|Repost|Like|Bookmark|Share|Views|Follow|Following|Followers|Likes|Reposts|Quotes|Relevant|View quotes|Want to publish|Upgrade to Premium|Paid partnership)/i.test(t)) return false;
     return true;
   });
 
