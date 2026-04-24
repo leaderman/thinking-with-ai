@@ -68,8 +68,23 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 
 ## 第五步：下载图片到本地
 
-- 创建以文章标题命名的目录（去掉特殊字符，空格换成短横线）
-- 图片存入该目录下的 `images/` 子目录，按顺序命名 `img-00.jpg`、`img-01.jpg`……
+目录结构固定如下，以文章 URL 中的 **status ID** 作为目录名：
+
+```
+/tmp/{status_id}/
+├── article.md
+└── images/
+    ├── cover.jpg       ← 封面图（第一张图）
+    ├── img-01.jpg
+    ├── img-02.jpg
+    └── ...
+```
+
+- 基础目录：`/tmp`
+- 文章目录：`/tmp/{status_id}/`（status ID 取自 URL，如 `https://x.com/user/status/2040202068091142208` → `2040202068091142208`）
+- 文章文件：`/tmp/{status_id}/article.md`
+- 图片目录：`/tmp/{status_id}/images/`
+- **封面图固定命名为 `cover.jpg`**，其余图片按顺序命名 `img-01.jpg`、`img-02.jpg`……
 - 下载时带上 `User-Agent` 请求头，避免被拒绝
 
 ---
@@ -85,7 +100,7 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 **Published:** 发布日期
 **Source:** 原文 URL
 
-![Cover](images/img-00.jpg)
+![Cover](images/cover.jpg)
 
 （正文段落）
 
@@ -96,7 +111,7 @@ https://pbs.twimg.com/media/XXXX?format=jpg&name=small
 ```
 
 **图片插入位置**：由于 X 的 DOM 结构复杂，图片在正文中的精确位置难以稳定获取。
-实用策略：第一张图作为封面放在标题下方，其余图片**按照它们在 DOM 中出现的顺序**，穿插在对应段落附近插入。
+实用策略：第一张图作为封面（`cover.jpg`）放在标题下方，其余图片（`img-01.jpg` 起）**按照它们在 DOM 中出现的顺序**，穿插在对应段落附近插入。
 
 **噪声清理**：`innerText` 会包含点赞数、转发数、浏览量等 UI 文字（如 "28 79 795 372K"），以及重复的标题行，需要识别并去掉。判断依据：
 - 纯数字行或带 K/M 后缀的数字行
